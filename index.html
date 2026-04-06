@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Token Counter & Context Window Estimator</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  textarea { tab-size: 2; }
+  .bar-bg { background: #e5e7eb; }
+  .bar-fill { transition: width 0.3s ease; }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+<div class="max-w-6xl mx-auto p-6">
+
+  <!-- Header -->
+  <header class="mb-6">
+    <h1 class="text-3xl font-bold mb-2">LLM Token Counter & Context Window Estimator</h1>
+    <p class="text-gray-600">Paste any text to see how many tokens it consumes across major LLM tokenizers, and how much of each model's context window it would fill.</p>
+  </header>
+
+  <!-- Input Area -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
+    <div class="flex justify-between items-center mb-2">
+      <label for="input" class="font-semibold">Your text:</label>
+      <div class="flex gap-2">
+        <button id="clearBtn" class="text-sm text-gray-500 hover:text-gray-700">Clear</button>
+        <button id="sampleBtn" class="text-sm text-blue-600 hover:text-blue-700">Load sample</button>
+      </div>
+    </div>
+    <textarea id="input" rows="10" class="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 mono text-sm" placeholder="Paste your text here..."></textarea>
+    <div class="mt-2 text-sm text-gray-500 flex gap-4">
+      <span>Characters: <span id="charCount" class="mono font-semibold text-gray-900">0</span></span>
+      <span>Words: <span id="wordCount" class="mono font-semibold text-gray-900">0</span></span>
+      <span>Lines: <span id="lineCount" class="mono font-semibold text-gray-900">0</span></span>
+    </div>
+  </div>
+
+  <!-- Token Counts -->
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+    <div class="bg-white rounded-lg border border-gray-200 p-4">
+      <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">GPT-4o, GPT-4.1</div>
+      <div class="mono text-2xl font-bold text-gray-900" id="o200k">0</div>
+      <div class="text-xs text-green-600 mt-1">✓ Exact (o200k_base)</div>
+    </div>
+    <div class="bg-white rounded-lg border border-gray-200 p-4">
+      <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">GPT-4, GPT-3.5</div>
+      <div class="mono text-2xl font-bold text-gray-900" id="cl100k">0</div>
+      <div class="text-xs text-green-600 mt-1">✓ Exact (cl100k_base)</div>
+    </div>
+    <div class="bg-white rounded-lg border border-gray-200 p-4">
+      <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">Claude (Opus/Sonnet/Haiku)</div>
+      <div class="mono text-2xl font-bold text-gray-900" id="claudeEst">0</div>
+      <div class="text-xs text-amber-600 mt-1">~ Estimate (3.5 chars/token)</div>
+    </div>
+    <div class="bg-white rounded-lg border border-gray-200 p-4">
+      <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">Llama 3, Mistral</div>
+      <div class="mono text-2xl font-bold text-gray-900" id="llamaEst">0</div>
+      <div class="text-xs text-amber-600 mt-1">~ Estimate (3.8 chars/token)</div>
+    </div>
+  </div>
+
+  <!-- Context Window Utilisation -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
+    <h2 class="font-semibold text-lg mb-3">Context Window Used</h2>
+    <p class="text-sm text-gray-600 mb-4">How much of each model's context window your input would consume:</p>
+    <div id="contextBars" class="space-y-3"></div>
+  </div>
+
+  <!-- Cost Estimator -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
+    <h2 class="font-semibold text-lg mb-3">Rough Cost Estimate (Input Only)</h2>
+    <p class="text-sm text-gray-600 mb-4">Approximate cost to send this as input to each model. Output tokens are billed separately and usually cost more.</p>
+    <div id="costTable" class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="text-left text-gray-500 border-b border-gray-200">
+          <tr>
+            <th class="py-2">Model</th>
+            <th class="py-2 text-right">Input price (per 1M tok)</th>
+            <th class="py-2 text-right">Estimated cost</th>
+          </tr>
+        </thead>
+        <tbody id="costRows" class="mono"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Disclaimers -->
+  <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+    <h3 class="font-semibold text-amber-900 mb-2">Honest Caveats</h3>
+    <ul class="text-sm text-amber-900 space-y-1 list-disc list-inside">
+      <li><span class="font-semibold">OpenAI counts are exact</span> — they use the published <span class="mono">tiktoken</span> tokenizer.</li>
+      <li><span class="font-semibold">Claude and Llama counts are estimates</span> — Anthropic does not publish their tokenizer, and Llama estimates here use a character-ratio heuristic. Real counts can vary by ±20% depending on language, code, and special characters.</li>
+      <li>For an exact Claude count, use Anthropic's <span class="mono">count_tokens</span> API endpoint.</li>
+      <li>Cost figures are approximate as of early 2026 and may have changed. Check the provider's pricing page before relying on them for budgeting.</li>
+      <li>This tool runs entirely in your browser. Nothing is sent anywhere.</li>
+    </ul>
+  </div>
+
+  <footer class="text-center text-xs text-gray-400 pb-6">
+    Built as a self-contained HTML artifact. Tokenizer: <span class="mono">gpt-tokenizer</span> via esm.sh.
+  </footer>
+
+</div>
+
+<script type="module">
+  import { encode as encodeCl100k } from 'https://esm.sh/gpt-tokenizer';
+  import { encode as encodeO200k } from 'https://esm.sh/gpt-tokenizer/encoding/o200k_base';
+
+  // Context windows (tokens) — early 2026 figures
+  const models = [
+    { name: 'Claude Opus 4',     window: 200000, color: 'bg-purple-500', use: 'claudeEst' },
+    { name: 'Claude Sonnet 4',   window: 200000, color: 'bg-purple-400', use: 'claudeEst' },
+    { name: 'Claude Haiku 4.5',  window: 200000, color: 'bg-purple-300', use: 'claudeEst' },
+    { name: 'GPT-4o',            window: 128000, color: 'bg-emerald-500', use: 'o200k' },
+    { name: 'GPT-4.1',           window: 1000000, color: 'bg-emerald-600', use: 'o200k' },
+    { name: 'GPT-4 Turbo',       window: 128000, color: 'bg-emerald-400', use: 'cl100k' },
+    { name: 'Gemini 1.5 Pro',    window: 2000000, color: 'bg-blue-500', use: 'o200k' },
+    { name: 'Gemini 2.0 Flash',  window: 1000000, color: 'bg-blue-400', use: 'o200k' },
+    { name: 'Llama 3.1 (405B)',  window: 128000, color: 'bg-orange-500', use: 'llamaEst' },
+  ];
+
+  // Pricing (USD per 1M input tokens) — approximate, early 2026
+  const pricing = [
+    { name: 'Claude Opus 4',      price: 15.00, use: 'claudeEst' },
+    { name: 'Claude Sonnet 4',    price: 3.00,  use: 'claudeEst' },
+    { name: 'Claude Haiku 4.5',   price: 1.00,  use: 'claudeEst' },
+    { name: 'GPT-4o',             price: 2.50,  use: 'o200k' },
+    { name: 'GPT-4.1',            price: 2.00,  use: 'o200k' },
+    { name: 'GPT-4 Turbo',        price: 10.00, use: 'cl100k' },
+    { name: 'Gemini 1.5 Pro',     price: 1.25,  use: 'o200k' },
+    { name: 'Gemini 2.0 Flash',   price: 0.10,  use: 'o200k' },
+  ];
+
+  const inputEl = document.getElementById('input');
+  const charEl = document.getElementById('charCount');
+  const wordEl = document.getElementById('wordCount');
+  const lineEl = document.getElementById('lineCount');
+  const cl100kEl = document.getElementById('cl100k');
+  const o200kEl = document.getElementById('o200k');
+  const claudeEl = document.getElementById('claudeEst');
+  const llamaEl = document.getElementById('llamaEst');
+  const contextBarsEl = document.getElementById('contextBars');
+  const costRowsEl = document.getElementById('costRows');
+
+  function fmt(n) { return n.toLocaleString('en-US'); }
+
+  function update() {
+    const text = inputEl.value;
+    const chars = text.length;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const lines = text ? text.split('\n').length : 0;
+
+    charEl.textContent = fmt(chars);
+    wordEl.textContent = fmt(words);
+    lineEl.textContent = fmt(lines);
+
+    // Token counts
+    const counts = {
+      cl100k: text ? encodeCl100k(text).length : 0,
+      o200k:  text ? encodeO200k(text).length : 0,
+      claudeEst: Math.ceil(chars / 3.5),
+      llamaEst:  Math.ceil(chars / 3.8),
+    };
+
+    cl100kEl.textContent = fmt(counts.cl100k);
+    o200kEl.textContent  = fmt(counts.o200k);
+    claudeEl.textContent = fmt(counts.claudeEst);
+    llamaEl.textContent  = fmt(counts.llamaEst);
+
+    // Context bars
+    contextBarsEl.innerHTML = models.map(m => {
+      const used = counts[m.use];
+      const pct = Math.min(100, (used / m.window) * 100);
+      const pctDisplay = pct < 0.1 && pct > 0 ? '<0.1' : pct.toFixed(1);
+      const warn = pct > 80 ? 'text-red-600 font-semibold' : pct > 50 ? 'text-amber-600' : 'text-gray-600';
+      return `
+        <div>
+          <div class="flex justify-between text-sm mb-1">
+            <span class="font-medium">${m.name} <span class="text-gray-400 text-xs">(${fmt(m.window)} tok)</span></span>
+            <span class="mono ${warn}">${fmt(used)} / ${pctDisplay}%</span>
+          </div>
+          <div class="bar-bg h-2 rounded-full overflow-hidden">
+            <div class="${m.color} bar-fill h-full rounded-full" style="width: ${pct}%"></div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Cost rows
+    costRowsEl.innerHTML = pricing.map(p => {
+      const tokens = counts[p.use];
+      const cost = (tokens / 1000000) * p.price;
+      const costStr = cost < 0.000001 ? '$0.00' : cost < 0.01 ? `$${cost.toFixed(6)}` : `$${cost.toFixed(4)}`;
+      return `
+        <tr class="border-b border-gray-100">
+          <td class="py-2 text-gray-900">${p.name}</td>
+          <td class="py-2 text-right text-gray-600">$${p.price.toFixed(2)}</td>
+          <td class="py-2 text-right font-semibold">${costStr}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  inputEl.addEventListener('input', update);
+
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    inputEl.value = '';
+    update();
+  });
+
+  document.getElementById('sampleBtn').addEventListener('click', () => {
+    inputEl.value = `When agents talk to agents, who's really talking?
+
+Recently, I dove into Microsoft's MSRC blog on how they defend against indirect prompt injection attacks, and it got me thinking about what this means in a world where agents are calling other agents.
+
+Indirect prompt injection is when malicious instructions are hidden inside content that an AI reads — a document, an email, a webpage. The AI doesn't know the difference between "real" instructions and poisoned content — it just follows whatever it reads.
+
+OWASP ranks this as the #1 LLM vulnerability in 2025. It's a big deal.
+
+The trust boundary problem in agent-to-agent: every agent's output becomes the next agent's input. Agent B has no way to know whether Agent A's output was generated cleanly or influenced by a poisoned email. A compromised agent doesn't need to exfiltrate data directly — it just needs to influence the next agent in the chain.`;
+    update();
+  });
+
+  // Initial render
+  update();
+</script>
+
+</body>
+</html>
+</content>
